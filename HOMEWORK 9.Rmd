@@ -12,6 +12,7 @@ library(tree)
 library(randomForest)
 library(gbm)
 
+
 ```
 
 ## 1.
@@ -28,47 +29,129 @@ AMZ$target <- as.factor(AMZ$target)
 train <- sample(1:nrow(AMZ), size = nrow(AMZ)*0.8)
 test <- dplyr::setdiff(1:nrow(AMZ), train)
 
+#create training and test data sets
 AMZ_training <-  AMZ[train, ]
 AMZ_test <- AMZ[test, ]
 
 
 
 ```
-##2. 
+##2.  
 
+###Classification Tree Fit
 ```{r train class model}
 
 #Fit Regression Tree 
 
 tree_fit_1 <- tree(target ~ ., data = AMZ_training)
 #Tree only has one node!!!
+tree_pred <- predict(tree_fit_1, type = "class", newdata = dplyr::select(AMZ_test, -target))
 
 
+tree_table <- table(tree_pred, AMZ_test$target)
+
+tree_table
+
+tree_test_error <- sum(diag(tree_table)/sum(tree_table))
+
+tree_test_error
 
 ```
+
+### Bagging
+
 ```{r train bagged Tree Model}
 
 #use bagging for tree model
 
-bag_fit_1 <- randomForest(target ~ ., data = AMZ_training, mtry = ncol(AMZ_training)-1, ntree = 200, importance=TRUE )
+bag_fit_1 <- randomForest(target ~ ., data = AMZ_training, mtry = ncol(AMZ_training)-1, ntree = 500, importance=TRUE )
 
-bag_fit_1
+bag_pred <- predict(bag_fit_1, newdata = dplyr::select(AMZ_test, -target), n.trees=500)
+
+
+bag_table <- table(bag_pred, AMZ_test$target)
+
+bag_table
+
+bag_test_error <- sum(diag(bag_table)/sum(bag_table))
+
+bag_test_error
 
 ```
+
+### Random Forest
 ```{r Rand Forest Fit}
 
 rf_fit_1 <- randomForest(target ~ ., data = AMZ_training, mtry = (ncol(AMZ_training)-1)/3, ntree = 500, importance=TRUE )
 
-rf_fit_1
+
+
+rf_pred <- predict(rf_fit_1, newdata = dplyr::select(AMZ_test, -target), n.trees=500)
+
+
+
+rf_table <- table(rf_pred, AMZ_test$target)
+
+rf_table
+
+rf_test_error <- sum(diag(rf_table)/sum(rf_table))
+
+rf_test_error
 
 ```
 
 ```{r boosted fit}
 
-boost_fit_1 <- gbm(target ~ ., data = AMZ_training, distribution = "bernoulli", n.trees = 5000, 
-                                shrinkage = 0.1, interaction.depth = 4)
+
+#model didn't work using target as a factor. It also didn'like numeric. Used character
+boost_fit_1 <- gbm(as.character(target) ~ ., data = AMZ_training, distribution = "bernoulli",cv.folds = 5 , n.trees = 5000, shrinkage = 0.1, interaction.depth = 3)
 
 boost_fit_1
 
+#obtain the best cross validated # of trees
+boost_fit_1_best_cv <- gbm.perf(boost_fit_1, method = "cv")
+
+#obtain the best # of trees based on best test interation 
+boost_fit_1_best_test <- gbm.perf(boost_fit_1, method = "test")
+
+gbm.perf(boost_fit_1, method = )
+
+#make prediction based on best Cross Validation number of trees and best test number of trees
+boost_pred <- predict.gbm(boost_fit_1, newdata = dplyr::select(AMZ_test, -target),type = "response", n.trees = c(boost_fit_1_best_cv, boost_fit_1_best_test))
+
+
+#the fit gives the log odds of the resonse instead of the logical 0,1
+#convert boost pred to a tibble
+boost_pred <- boost_pred %>% as.tibble
+
+
+#add a column of the predicted values from each number of trees
+#use the log odds to say what group the fit will belong to
+boost_pred$class_cv <- ifelse(boost_pred$`2949` >= 0.5, 1, 0)
+boost_pred$class_test <- ifelse(boost_pred$`3739` >= 0.5, 1, 0)
+
+
+
+#create table comparing test data to predictons using cross validated # of trees
+boost_table_cv <- table(data.frame(boost_pred$class_cv, AMZ_test$target))
+
+
+#obtain test error rate of cross validated number of trees
+boost_test_error_cv <- sum(diag(boost_table_cv)/sum(boost_table_cv))
+
+#create table comparing test data to predictions using the best test interation # of trees
+boost_table_test <- table(data.frame(boost_pred$class_test, AMZ_test$target))
+
+#obtain test error rate based on best test iteration number of trees
+boost_test_error_test <- sum(diag(boost_table_test)/sum(boost_table_test))
+
+# create table with both error rates
+boost_error_table <- c(cv=boost_test_error_cv, test=boost_test_error_test)
+
+boost_error
+
+#Based on the test erro rate the best # of trees is 3739. This gives us a 0.960 error rate. 
+
 ```
+
 
